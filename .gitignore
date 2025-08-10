@@ -28,4 +28,3 @@ __pycache__/
 *.log
 tools/patch.txt
 tools/patches/*
-*.bak_move_sh
