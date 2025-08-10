@@ -10,14 +10,17 @@ ensure_dirs(){ mkdir -p var/logs var/memory var/tmp; : > "$LOG_FILE"; }
 help(){
 cat <<HLP
 Usage: ./dubash <cmd>
-  up         Lance l’environnement minimal (web)
-  down       Placeholder
-  build      Vérifie outils
-  test       Placeholder
-  status     Infos utiles (ports, logs)
-  logs       Tail logs
-  web:up     Lance serveur statique (public/)
-  web:open   Ouvre navigateur
+  up           Lance l’environnement minimal (web)
+  down         Placeholder
+  build        Vérifie outils
+  test         Placeholder
+  status       Infos utiles (ports, logs)
+  logs         Tail logs
+  web:up       Lance serveur statique (public/)
+  web:open     Ouvre navigateur
+  api:up       Lance l'API (Python stdlib)
+  api:open     Ouvre /health
+  api:status   Liste endpoints
 HLP
 }
 
@@ -25,10 +28,26 @@ cmd_build(){ ensure_dirs; log "🔧 Vérifs"; require python3; log "✅ OK"; }
 cmd_up(){ ensure_dirs; log "🚀 Start web"; ./dubash web:up; }
 cmd_down(){ log "🛑 Rien à arrêter (fg)"; }
 cmd_test(){ ensure_dirs; log "🧪 Rien pour l'instant"; }
-cmd_status(){ ensure_dirs; echo "== ${AGORA_NAME:-Agora} (${AGORA_ENV:-dev}) =="; echo "Web: http://127.0.0.1:${WEB_PORT:-8080}"; echo "Log: $LOG_FILE"; }
+cmd_status(){ ensure_dirs; echo "== ${AGORA_NAME:-Agora} (${AGORA_ENV:-dev}) =="; echo "Web: http://127.0.0.1:${WEB_PORT:-8080}"; echo "API: http://127.0.0.1:${API_PORT:-5050}"; echo "Log: $LOG_FILE"; }
 cmd_logs(){ ensure_dirs; tail -n 200 -f "$LOG_FILE"; }
-cmd_web_up(){ ensure_dirs; log "�� web"; ./services/web/run.sh; }
+
+cmd_web_up(){ ensure_dirs; log "🌐 web"; ./services/web/run.sh; }
 cmd_web_open(){ port="${WEB_PORT:-8080}"; if command -v xdg-open >/dev/null; then xdg-open "http://127.0.0.1:${port}" >/dev/null 2>&1||true; elif command -v open >/dev/null; then open "http://127.0.0.1:${port}" >/dev/null 2>&1||true; else echo "→ http://127.0.0.1:${port}"; fi; }
+
+cmd_api_up(){ ensure_dirs; log "🧩 API → start"; ./services/api/run.sh; }
+cmd_api_open(){
+  [ -f ".env" ] && { set -a; . ".env"; set +a; }
+  : "${API_PORT:=5050}"; url="http://127.0.0.1:${API_PORT}/health"
+  if command -v xdg-open >/dev/null 2>&1; then xdg-open "$url" >/dev/null 2>&1||true
+  elif command -v open >/dev/null 2>&1; then open "$url" >/dev/null 2>&1||true
+  else echo "→ $url"; fi
+}
+cmd_api_status(){
+  [ -f ".env" ] && { set -a; . ".env"; set +a; }
+  : "${API_PORT:=5050}"
+  echo "API: http://127.0.0.1:${API_PORT}"
+  echo "Endpoints: GET /health, GET /time, POST /echo"
+}
 
 case "${1:-help}" in
   help|-h|--help) help ;;
@@ -40,5 +59,8 @@ case "${1:-help}" in
   logs) cmd_logs ;;
   web:up) cmd_web_up ;;
   web:open) cmd_web_open ;;
+  api:up) cmd_api_up ;;
+  api:open) cmd_api_open ;;
+  api:status) cmd_api_status ;;
   *) echo "Commande inconnue: $1"; echo; help; exit 1 ;;
 esac
