@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[ -f ".env" ] && { set -a; . ".env"; set +a; }
+LOG_FILE="${LOG_FILE:-var/logs/dubash.log}"
+
+log(){ echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"; }
+require(){ command -v "$1" >/dev/null 2>&1 || { echo "❌ Requis: $1"; exit 1; }; }
+ensure_dirs(){ mkdir -p var/logs var/memory var/tmp; : > "$LOG_FILE"; }
+
+help(){
+cat <<HLP
+Usage: ./dubash <cmd>
+  up             Lance web
+  down           Stop placeholder
+  build          Vérifie outils
+  test           Placeholder
+  status         Infos utiles
+  logs           Tail logs
+  web:up         Serveur statique
+  web:open       Ouvre navigateur
+  api:up         Lance API
+  api:open       Ouvre /health
+  api:status     Liste endpoints
+  seed:circles   Remplit avec cercles de démo
+  dump:circles   Affiche cercles (JSON)
+  clear:circles  Vide tous les cercles
+HLP
+}
+
+cmd_build(){ ensure_dirs; log "🔧 Vérifs"; require python3; log "✅ OK"; }
+cmd_up(){ ensure_dirs; log "🚀 Start web"; ./dubash web:up; }
+cmd_down(){ log "🛑 Rien à arrêter"; }
+cmd_test(){ ensure_dirs; log "🧪 Rien pour l'instant"; }
+cmd_status(){ ensure_dirs; echo "== ${AGORA_NAME:-Agora} (${AGORA_ENV:-dev}) =="; echo "Web: http://127.0.0.1:${WEB_PORT:-8080}"; echo "API: http://127.0.0.1:${API_PORT:-5050}"; }
+cmd_logs(){ ensure_dirs; tail -n 200 -f "$LOG_FILE"; }
+
+cmd_web_up(){ ensure_dirs; log "🌐 web"; ./services/web/run.sh; }
+cmd_web_open(){ port="${WEB_PORT:-8080}"; if command -v xdg-open >/dev/null; then xdg-open "http://127.0.0.1:${port}" >/dev/null 2>&1||true; elif command -v open >/dev/null; then open "http://127.0.0.1:${port}" >/dev/null 2>&1||true; else echo "→ http://127.0.0.1:${port}"; fi; }
+
+cmd_api_up(){ ensure_dirs; log "🧩 API → start"; ./services/api/run.sh; }
+cmd_api_open(){ [ -f ".env" ] && { set -a; . ".env"; set +a; }; : "${API_PORT:=5050}"; url="http://127.0.0.1:${API_PORT}/health"; if command -v xdg-open >/dev/null 2>&1; then xdg-open "$url" >/dev/null 2>&1||true; elif command -v open >/dev/null 2>&1; then open "$url" >/dev/null 2>&1||true; else echo "→ $url"; fi; }
+cmd_api_status(){ [ -f ".env" ] && { set -a; . ".env"; set +a; }; : "${API_PORT:=5050}"; echo "API: http://127.0.0.1:${API_PORT}"; echo "Endpoints: GET /health, GET /time, POST /echo, CRUD /circles"; }
+
+cmd_seed_circles(){
+  ensure_dirs; require curl
+  [ -f ".env" ] && { set -a; . ".env"; set +a; }; : "${API_PORT:=5050}"
+  log "🌱 Seeding cercles"
+  seeds='[
+    {"title":"Agora — Cœur","description":"Coordination, écoute, cadence"},
+    {"title":"Tech — Forge","description":"Backend, IA, orchestration Bash"},
+    {"title":"Culture — Racines","description":"Art, récit, mémoire vivante"}
+  ]'
+  python3 - "$API_PORT" <<'PYSEED'
+import sys, json, urllib.request
+port = int(sys.argv[1])
+seeds = json.loads(sys.stdin.read())
+for s in seeds:
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/circles",
+                                 data=json.dumps(s).encode("utf-8"),
+                                 headers={"Content-Type":"application/json"})
+    try:
+        with urllib.request.urlopen(req) as resp:
+            print("[seed] OK", s["title"], resp.status)
+    except urllib.error.HTTPError as e:
+        if e.code == 409:
+            print("[seed] SKIP exists", s["title"])
+        else:
+            print("[seed] ERR", s["title"], e.code)
+PYSEED
+}
+
+cmd_dump_circles(){
+  ensure_dirs; require curl
+  [ -f ".env" ] && { set -a; . ".env"; set +a; }; : "${API_PORT:=5050}"
+  log "📝 Dump cercles"
+  curl -s "http://127.0.0.1:${API_PORT}/circles"
+}
+
+cmd_clear_circles(){
+  ensure_dirs
+  [ -f ".env" ] && { set -a; . ".env"; set +a; }; : "${API_PORT:=5050}"
+  if curl -sf "http://127.0.0.1:${API_PORT}/health" >/dev/null 2>&1; then
+    log "🧽 Clear (via API)"
+    ids=$(curl -s "http://127.0.0.1:${API_PORT}/circles" | python3 -c 'import sys,json; data=json.load(sys.stdin); print(" ".join(str(i["id"]) for i in data.get("items",[])))')
+    for id in $ids; do
+      curl -s -X DELETE "http://127.0.0.1:${API_PORT}/circles/$id" >/dev/null
+      echo "[clear] id=$id"
+    done
+  else
+    log "🧼 Clear (wipe fichier)"
+    echo "[]" > var/memory/circles.json
+  fi
+  log "✅ Cercles vidés"
+}
+
+# === extra cmds hook (after functions) ===
+if [ -f "tools/extra_cmds.sh" ]; then
+  case "${1:-}" in
+    tree:circles|circle:move|metrics:circles)
+      . tools/extra_cmds.sh
+      extra_dispatch "$@"
+      exit 0
+    ;;
+  esac
+fi
+# === end hook ===
+case "${1:-help}" in
+  help|-h|--help) help ;;
+  build) cmd_build ;;
+  up) cmd_up ;;
+  down) cmd_down ;;
+  test) cmd_test ;;
+  status) cmd_status ;;
+  logs) cmd_logs ;;
+  web:up) cmd_web_up ;;
+  web:open) cmd_web_open ;;
+  api:up) cmd_api_up ;;
+  api:open) cmd_api_open ;;
+  api:status) cmd_api_status ;;
+  seed:circles) cmd_seed_circles ;;
+  dump:circles) cmd_dump_circles ;;
+  clear:circles) cmd_clear_circles ;;
+  *) echo "Commande inconnue: $1"; echo; help; exit 1 ;;
+esac
