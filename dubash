@@ -1,123 +1,66 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
-# Charge .env si dispo
-if [ -f ".env" ]; then
-  set -a; . ".env"; set +a
-else
-  LOG_FILE="${LOG_FILE:-var/logs/dubash.log}"
-fi
-
+[ -f ".env" ] && { set -a; . ".env"; set +a; }
 LOG_FILE="${LOG_FILE:-var/logs/dubash.log}"
 
-log() {
-  local ts; ts="$(date '+%Y-%m-%d %H:%M:%S')"
-  echo "[$ts] $*" | tee -a "$LOG_FILE"
-}
+log(){ echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"; }
+require(){ command -v "$1" >/dev/null 2>&1 || { echo "❌ Requis: $1"; exit 1; }; }
+ensure_dirs(){ mkdir -p var/logs var/memory var/tmp; : > "$LOG_FILE"; }
 
-require() {
-  command -v "$1" >/dev/null 2>&1 || { echo "❌ Commande requise manquante: $1"; exit 1; }
-}
-
-ensure_dirs() {
-  mkdir -p var/logs var/memory var/tmp
-  : > "$LOG_FILE" # crée le fichier s'il n'existe pas (n’efface pas l’historique tee -a)
-}
-
-help() {
-  cat <<HLP
-Usage: ./dubash <commande>
-
-Commandes de base:
-  up                 Lance l’environnement minimal (web)
-  down               Arrête les services lancés par dubash (si gérés en bg)
-  build              Prépare/valide l’environnement (vérifs outils)
-  test               Point d’entrée pour des tests (placeholder)
-  status             Affiche les infos utiles (ports, services)
-  logs               Montre les derniers logs
-  help               Aide
-
-Services:
-  web:up             Lance le service web statique (public/)
-  web:open           Ouvre le navigateur sur le port WEB_PORT
-
-Astuce:
-  - Configure .env pour tes ports & variables
-  - Ajoute tes propres commandes ici (API, IA…)
+help(){
+cat <<HLP
+Usage: ./dubash <cmd>
+  up           Lance l’environnement minimal (web)
+  down         Placeholder
+  build        Vérifie outils
+  test         Placeholder
+  status       Infos utiles (ports, logs)
+  logs         Tail logs
+  web:up       Lance serveur statique (public/)
+  web:open     Ouvre navigateur
+  api:up       Lance l'API (Python stdlib)
+  api:open     Ouvre /health
+  api:status   Liste endpoints
 HLP
 }
 
-cmd_build() {
-  ensure_dirs
-  log "🔧 Vérification outils requis"
-  require python3
-  log "✅ Environnement OK"
+cmd_build(){ ensure_dirs; log "🔧 Vérifs"; require python3; log "✅ OK"; }
+cmd_up(){ ensure_dirs; log "🚀 Start web"; ./dubash web:up; }
+cmd_down(){ log "🛑 Rien à arrêter (fg)"; }
+cmd_test(){ ensure_dirs; log "🧪 Rien pour l'instant"; }
+cmd_status(){ ensure_dirs; echo "== ${AGORA_NAME:-Agora} (${AGORA_ENV:-dev}) =="; echo "Web: http://127.0.0.1:${WEB_PORT:-8080}"; echo "API: http://127.0.0.1:${API_PORT:-5050}"; echo "Log: $LOG_FILE"; }
+cmd_logs(){ ensure_dirs; tail -n 200 -f "$LOG_FILE"; }
+
+cmd_web_up(){ ensure_dirs; log "🌐 web"; ./services/web/run.sh; }
+cmd_web_open(){ port="${WEB_PORT:-8080}"; if command -v xdg-open >/dev/null; then xdg-open "http://127.0.0.1:${port}" >/dev/null 2>&1||true; elif command -v open >/dev/null; then open "http://127.0.0.1:${port}" >/dev/null 2>&1||true; else echo "→ http://127.0.0.1:${port}"; fi; }
+
+cmd_api_up(){ ensure_dirs; log "🧩 API → start"; ./services/api/run.sh; }
+cmd_api_open(){
+  [ -f ".env" ] && { set -a; . ".env"; set +a; }
+  : "${API_PORT:=5050}"; url="http://127.0.0.1:${API_PORT}/health"
+  if command -v xdg-open >/dev/null 2>&1; then xdg-open "$url" >/dev/null 2>&1||true
+  elif command -v open >/dev/null 2>&1; then open "$url" >/dev/null 2>&1||true
+  else echo "→ $url"; fi
+}
+cmd_api_status(){
+  [ -f ".env" ] && { set -a; . ".env"; set +a; }
+  : "${API_PORT:=5050}"
+  echo "API: http://127.0.0.1:${API_PORT}"
+  echo "Endpoints: GET /health, GET /time, POST /echo"
 }
 
-cmd_up() {
-  ensure_dirs
-  log "🚀 Démarrage minimal: web"
-  ./dubash web:up
-}
-
-cmd_down() {
-  # Ici, on pourrait gérer des PID si on lance en arrière-plan. Pour l’instant, rien.
-  log "🛑 Rien à arrêter (mode fg)."
-}
-
-cmd_test() {
-  ensure_dirs
-  log "🧪 Rien pour l'instant (placeholder)."
-}
-
-cmd_status() {
-  ensure_dirs
-  local port="${WEB_PORT:-8080}"
-  echo "== ${AGORA_NAME:-Agora} (${AGORA_ENV:-dev}) =="
-  echo "Web: http://127.0.0.1:${port}"
-  echo "Log file: $LOG_FILE"
-}
-
-cmd_logs() {
-  ensure_dirs
-  tail -n 200 -f "$LOG_FILE"
-}
-
-cmd_web_up() {
-  ensure_dirs
-  log "🌐 Lancement du service web"
-  ./services/web/run.sh
-}
-
-cmd_web_open() {
-  local port="${WEB_PORT:-8080}"
-  # Essaie d’ouvrir selon OS
-  if command -v xdg-open >/dev/null 2>&1; then
-    xdg-open "http://127.0.0.1:${port}" >/dev/null 2>&1 || true
-  elif command -v open >/dev/null 2>&1; then
-    open "http://127.0.0.1:${port}" >/dev/null 2>&1 || true
-  else
-    echo "Ouvre ton navigateur sur: http://127.0.0.1:${port}"
-  fi
-}
-
-main() {
-  case "${1:-help}" in
-    help|-h|--help) help ;;
-    build) cmd_build ;;
-    up) cmd_up ;;
-    down) cmd_down ;;
-    test) cmd_test ;;
-    status) cmd_status ;;
-    logs) cmd_logs ;;
-    web:up) cmd_web_up ;;
-    web:open) cmd_web_open ;;
-    *)
-      echo "Commande inconnue: $1"
-      echo
-      help
-      exit 1
-      ;;
-  esac
-}
-main "$@"
+case "${1:-help}" in
+  help|-h|--help) help ;;
+  build) cmd_build ;;
+  up) cmd_up ;;
+  down) cmd_down ;;
+  test) cmd_test ;;
+  status) cmd_status ;;
+  logs) cmd_logs ;;
+  web:up) cmd_web_up ;;
+  web:open) cmd_web_open ;;
+  api:up) cmd_api_up ;;
+  api:open) cmd_api_open ;;
+  api:status) cmd_api_status ;;
+  *) echo "Commande inconnue: $1"; echo; help; exit 1 ;;
+esac
