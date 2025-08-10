@@ -1,3 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Dossiers & données
+mkdir -p services/api var/memory var/logs
+[ -f var/memory/circles.json ] || echo "[]" > var/memory/circles.json
+grep -q '^API_PORT=' .env 2>/dev/null || echo 'API_PORT=5050' >> .env
+
+# API complète (garde /, /health, /time, /echo + endpoints circles)
+cat > services/api/app.py <<'PY'
 #!/usr/bin/env python3
 import os, json, time, re, tempfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -154,3 +164,36 @@ def main():
 
 if __name__ == "__main__":
     main()
+PY
+chmod +x services/api/app.py
+
+# Doc
+if ! grep -q "### Cercles" DOC.md 2>/dev/null; then
+  cat >> DOC.md <<'MD'
+
+### Cercles
+- `GET /circles` → `{"items":[...],"count":n}`
+- `POST /circles` → crée `{ "title": "...", "description": "..." }`
+- `GET /circles/<id>`
+- `PATCH /circles/<id>` → MAJ partielle `title|description`
+- `DELETE /circles/<id>`
+MD
+fi
+
+# (Optionnel) Commit & push si git
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  # Basculer/Créer dev si besoin
+  if git rev-parse --verify dev >/dev/null 2>&1; then
+    git checkout dev
+  else
+    if git ls-remote --heads origin dev | grep -q dev; then git checkout -t origin/dev; else git checkout -b dev; fi
+  fi
+  git add -A
+  if ! git diff --cached --quiet; then
+    git commit -m "feat(circles): endpoints CRUD + stockage JSON local"
+    # Décommente si tu veux pousser auto :
+    # git push -u origin dev || true
+  fi
+fi
+
+echo "✅ Cercles prêts. Redémarre l'API: ./dubash api:up"
