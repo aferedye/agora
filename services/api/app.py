@@ -1,51 +1,13 @@
 #!/usr/bin/env python3
-import os, json, time, re, tempfile
+import os, json, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 API_PORT = int(os.getenv("API_PORT", "5050"))
-DB_PATH  = os.path.join("var", "memory", "circles.json")
-
-TITLE_MAX = 80
-DESC_MAX  = 2000
-
-def _load_db():
-    try:
-        with open(DB_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return []
-    except Exception:
-        return []
-
-def _save_db(data):
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix="circles_", suffix=".json", dir=os.path.dirname(DB_PATH))
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, DB_PATH)
-
-def _next_id(items):
-    return (max((c.get("id", 0) for c in items), default=0) + 1)
-
-def _now_iso():
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-def _norm_title(t):
-    return (t or "").strip().lower()
-
-def _has_title(items, title, exclude_id=None):
-    nt = _norm_title(title)
-    for c in items:
-        if exclude_id is not None and c.get("id") == exclude_id:
-            continue
-        if _norm_title(c.get("title")) == nt:
-            return True
-    return False
 
 class Handler(BaseHTTPRequestHandler):
     def _cors(self):
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
     def _json(self, code:int, payload:dict):
@@ -57,14 +19,6 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _parse_body(self):
-        n = int(self.headers.get("Content-Length", "0"))
-        raw = self.rfile.read(n) if n > 0 else b"{}"
-        try:
-            return json.loads(raw.decode("utf-8") or "{}")
-        except Exception:
-            return {}
-
     def log_message(self, fmt, *args):
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
         print(f"[{ts}] {self.client_address[0]} {self.command} {self.path} | " + fmt%args)
@@ -72,109 +26,28 @@ class Handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self.send_response(204); self._cors(); self.end_headers()
 
-    # ---- GET ----
     def do_GET(self):
-        if self.path in ("/", ""):
+        if self.path == "/" or self.path == "":
             return self._json(200, {
                 "name": "Agora API",
-                "endpoints": ["/health", "/time", "/echo (POST)", "/circles"],
-                "limits": {"title_max": TITLE_MAX, "description_max": DESC_MAX}
+                "endpoints": ["/health", "/time", "/echo (POST)"]
             })
         if self.path == "/health":
             return self._json(200, {"status": "ok"})
         if self.path == "/time":
             return self._json(200, {"epoch": time.time()})
-        if self.path == "/circles":
-            data = _load_db()
-            return self._json(200, {"items": data, "count": len(data)})
-
-        m = re.match(r"^/circles/(\d+)$", self.path)
-        if m:
-            cid = int(m.group(1))
-            data = _load_db()
-            for c in data:
-                if c.get("id") == cid:
-                    return self._json(200, c)
-            return self._json(404, {"error": "not_found"})
         return self._json(404, {"error":"not_found"})
 
-    # ---- POST ----
     def do_POST(self):
-        if self.path == "/echo":
-            return self._json(200, {"ok": True, "received": self._parse_body()})
-
-        if self.path == "/circles":
-            body = self._parse_body()
-            title = (body.get("title") or "").strip()
-            desc  = (body.get("description") or "").strip()
-
-            if not title:
-                return self._json(400, {"error": "title_required"})
-            if len(title) > TITLE_MAX:
-                return self._json(400, {"error": "title_too_long", "max": TITLE_MAX})
-            if len(desc) > DESC_MAX:
-                return self._json(400, {"error": "description_too_long", "max": DESC_MAX})
-
-            data = _load_db()
-            if _has_title(data, title):
-                return self._json(409, {"error": "title_exists"})
-
-            cid = _next_id(data)
-            now = _now_iso()
-            item = {
-                "id": cid,
-                "title": title,
-                "description": desc,
-                "created_at": now,
-                "updated_at": now
-            }
-            data.append(item)
-            _save_db(data)
-            return self._json(201, item)
-
-        return self._json(404, {"error":"not_found"})
-
-    # ---- PATCH ----
-    def do_PATCH(self):
-        m = re.match(r"^/circles/(\d+)$", self.path)
-        if not m:
+        if self.path != "/echo":
             return self._json(404, {"error":"not_found"})
-        cid = int(m.group(1))
-        body = self._parse_body()
-        data = _load_db()
-        for c in data:
-            if c.get("id") == cid:
-                if "title" in body:
-                    t = (body.get("title") or "").strip()
-                    if not t:
-                        return self._json(400, {"error": "title_required"})
-                    if len(t) > TITLE_MAX:
-                        return self._json(400, {"error": "title_too_long", "max": TITLE_MAX})
-                    if _has_title(data, t, exclude_id=cid):
-                        return self._json(409, {"error": "title_exists"})
-                    c["title"] = t
-                if "description" in body:
-                    d = (body.get("description") or "").strip()
-                    if len(d) > DESC_MAX:
-                        return self._json(400, {"error": "description_too_long", "max": DESC_MAX})
-                    c["description"] = d
-                c["updated_at"] = _now_iso()
-                _save_db(data)
-                return self._json(200, c)
-        return self._json(404, {"error":"not_found"})
-
-    # ---- DELETE ----
-    def do_DELETE(self):
-        m = re.match(r"^/circles/(\d+)$", self.path)
-        if not m:
-            return self._json(404, {"error":"not_found"})
-        cid = int(m.group(1))
-        data = _load_db()
-        new_data = [c for c in data if c.get("id") != cid]
-        if len(new_data) == len(data):
-            return self._json(404, {"error":"not_found"})
-        _save_db(new_data)
-        return self._json(204, {})
+        n = int(self.headers.get("Content-Length","0"))
+        raw = self.rfile.read(n) if n>0 else b"{}"
+        try:
+            payload = json.loads(raw.decode("utf-8") or "{}")
+        except Exception:
+            payload={"_raw": raw.decode("utf-8","ignore")}
+        return self._json(200, {"ok": True, "received": payload})
 
 def main():
     server = HTTPServer(("0.0.0.0", API_PORT), Handler)
