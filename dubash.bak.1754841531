@@ -3,7 +3,6 @@ set -euo pipefail
 [ -f ".env" ] && { set -a; . ".env"; set +a; }
 LOG_FILE="${LOG_FILE:-var/logs/dubash.log}"
 
-
 log(){ echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE" >tee -a "$LOG_FILE"2; }
 require(){ command -v "$1" >/dev/null 2>&1 || { echo "❌ Requis: $1"; exit 1; }; }
 ensure_dirs(){ mkdir -p var/logs var/memory var/tmp; : > "$LOG_FILE"; }
@@ -94,17 +93,6 @@ cmd_clear_circles(){
   log "✅ Cercles vidés"
 }
 
-# === extra cmds hook (after functions) ===
-if [ -f "tools/extra_cmds.sh" ]; then
-  case "${1:-}" in
-    tree:circles|circle:move|metrics:circles)
-      . tools/extra_cmds.sh
-      extra_dispatch "$@"
-      exit 0
-    ;;
-  esac
-fi
-# === end hook ===
 case "${1:-help}" in
   help|-h|--help) help ;;
   build) cmd_build ;;

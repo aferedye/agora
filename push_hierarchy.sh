@@ -1,3 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+mkdir -p services/api var/memory
+
+# --- API avec parent_id + anti-cycles + endpoints enfants / filtre / tree ---
+cat > services/api/app.py <<'PY'
 #!/usr/bin/env python3
 import os, json, time, re, tempfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -313,3 +320,61 @@ def main():
 
 if __name__ == "__main__":
     main()
+PY
+chmod +x services/api/app.py
+
+# --- dubash: ajoute tree:circles (ASCII) ---
+# logs sont déjà sur stderr, on n’y touche pas
+if ! grep -q "tree:circles" dubash; then
+  sed -i 's|^esac$|  tree:circles) cmd_tree_circles ;;\n  esac|' dubash
+  cat >> dubash <<'FUN'
+
+cmd_tree_circles(){
+  ensure_dirs
+  require curl
+  [ -f ".env" ] && { set -a; . ".env"; set +a; }
+  : "${API_PORT:=5050}"
+  log "🌳 Tree cercles (ASCII)"
+  python3 - "$API_PORT" <<'PYT'
+import sys, json, urllib.request
+port = int(sys.argv[1])
+
+def fetch(url):
+    with urllib.request.urlopen(url) as r:
+        return json.loads(r.read().decode('utf-8'))
+
+try:
+    data = fetch(f"http://127.0.0.1:{port}/circles")
+    items = data.get("items", [])
+except Exception as e:
+    # si API down, on lit le fichier local
+    import os
+    p = os.path.join("var","memory","circles.json")
+    try:
+        with open(p,"r",encoding="utf-8") as f:
+            items = json.load(f)
+    except Exception:
+        items = []
+
+by_id = {c["id"]: c for c in items}
+children = {}
+for c in items:
+    children.setdefault(c.get("parent_id"), []).append(c)
+
+def walk(pid=None, prefix=""):
+    nodes = children.get(pid, [])
+    for i, n in enumerate(sorted(nodes, key=lambda x: x.get("title","").lower())):
+        is_last = (i == len(nodes)-1)
+        branch = "└─ " if is_last else "├─ "
+        print(prefix + branch + f"[{n['id']}] {n.get('title','')}")
+        walk(n["id"], prefix + ("   " if is_last else "│  "))
+
+# racines
+walk(None)
+PYT
+}
+FUN
+fi
+
+echo "✅ Hiérarchie prête. Redémarre l'API si nécessaire: ./dubash api:up"
+echo "→ Afficher l'arbre: ./dubash tree:circles"

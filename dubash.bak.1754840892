@@ -3,8 +3,7 @@ set -euo pipefail
 [ -f ".env" ] && { set -a; . ".env"; set +a; }
 LOG_FILE="${LOG_FILE:-var/logs/dubash.log}"
 
-
-log(){ echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE" >tee -a "$LOG_FILE"2; }
+log(){ echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"; }
 require(){ command -v "$1" >/dev/null 2>&1 || { echo "❌ Requis: $1"; exit 1; }; }
 ensure_dirs(){ mkdir -p var/logs var/memory var/tmp; : > "$LOG_FILE"; }
 
@@ -94,17 +93,6 @@ cmd_clear_circles(){
   log "✅ Cercles vidés"
 }
 
-# === extra cmds hook (after functions) ===
-if [ -f "tools/extra_cmds.sh" ]; then
-  case "${1:-}" in
-    tree:circles|circle:move|metrics:circles)
-      . tools/extra_cmds.sh
-      extra_dispatch "$@"
-      exit 0
-    ;;
-  esac
-fi
-# === end hook ===
 case "${1:-help}" in
   help|-h|--help) help ;;
   build) cmd_build ;;
@@ -122,50 +110,4 @@ case "${1:-help}" in
   dump:circles) cmd_dump_circles ;;
   clear:circles) cmd_clear_circles ;;
   *) echo "Commande inconnue: $1"; echo; help; exit 1 ;;
-  tree:circles) cmd_tree_circles ;;
-  esac
-
-cmd_tree_circles(){
-  ensure_dirs
-  require curl
-  [ -f ".env" ] && { set -a; . ".env"; set +a; }
-  : "${API_PORT:=5050}"
-  log "🌳 Tree cercles (ASCII)"
-  python3 - "$API_PORT" <<'PYT'
-import sys, json, urllib.request
-port = int(sys.argv[1])
-
-def fetch(url):
-    with urllib.request.urlopen(url) as r:
-        return json.loads(r.read().decode('utf-8'))
-
-try:
-    data = fetch(f"http://127.0.0.1:{port}/circles")
-    items = data.get("items", [])
-except Exception as e:
-    # si API down, on lit le fichier local
-    import os
-    p = os.path.join("var","memory","circles.json")
-    try:
-        with open(p,"r",encoding="utf-8") as f:
-            items = json.load(f)
-    except Exception:
-        items = []
-
-by_id = {c["id"]: c for c in items}
-children = {}
-for c in items:
-    children.setdefault(c.get("parent_id"), []).append(c)
-
-def walk(pid=None, prefix=""):
-    nodes = children.get(pid, [])
-    for i, n in enumerate(sorted(nodes, key=lambda x: x.get("title","").lower())):
-        is_last = (i == len(nodes)-1)
-        branch = "└─ " if is_last else "├─ "
-        print(prefix + branch + f"[{n['id']}] {n.get('title','')}")
-        walk(n["id"], prefix + ("   " if is_last else "│  "))
-
-# racines
-walk(None)
-PYT
-}
+esac
