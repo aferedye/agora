@@ -21,3 +21,10 @@ Prochaines briques : `api:up`, auth, modèle fractal.
   - `GET /health` → `{ "status": "ok" }`
   - `GET /time` → `{ "epoch": <timestamp> }`
   - `POST /echo` (JSON) → renvoie le payload
+
+### Cercles
+- `GET /circles` → `{"items":[...],"count":n}`
+- `POST /circles` → crée `{ "title": "...", "description": "..." }`
+- `GET /circles/<id>`
+- `PATCH /circles/<id>` → MAJ partielle `title|description`
+- `DELETE /circles/<id>`
