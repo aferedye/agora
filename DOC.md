@@ -20,3 +20,11 @@ Prochaines briques : `api:up`, auth, modèle fractal.
 - `./dubash seed:circles` → crée 2–3 cercles de démo (via API)
 - `./dubash dump:circles` → affiche la liste JSON
 - `./dubash clear:circles` → supprime tous les cercles (API si up, sinon wipe fichier)
+
+## API (stub)
+- Lancer: `./dubash api:up`
+- Ouvrir: `./dubash api:open`
+- Endpoints:
+  - `GET /health` → `{ "status": "ok" }`
+  - `GET /time` → `{ "epoch": <timestamp> }`
+  - `POST /echo` (JSON) → renvoie le payload
