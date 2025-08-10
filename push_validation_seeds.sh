@@ -1,3 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# -- Constantes
+TITLE_MAX=80
+DESC_MAX=2000
+
+mkdir -p services/api var/memory var/logs tools
+
+# 1) API avec validations + erreurs propres
+cat > services/api/app.py <<'PY'
 #!/usr/bin/env python3
 import os, json, time, re, tempfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -188,3 +199,118 @@ def main():
 
 if __name__ == "__main__":
     main()
+PY
+chmod +x services/api/app.py
+
+# 2) Ajout commandes Dubash utilitaires (seed/dump/clear via l’API)
+#    (pas de jq requis; on utilise curl)
+awk 'BEGIN{p=1}
+     /case "\${1:-help}" in/ {p=0}
+     {if(p) print}' dubash > dubash.head
+
+awk 'BEGIN{p=0}
+/case "\${1:-help}" in/ {print; p=1; next}
+{print}' dubash > dubash.body
+
+# Injecte nouveaux cases si absents
+grep -q "seed:circles)" dubash.body || \
+  sed -i 's/^case "\${1:-help}" in$/case "${1:-help}" in\n  seed:circles) cmd_seed_circles ;;\n  dump:circles) cmd_dump_circles ;;\n  clear:circles) cmd_clear_circles ;;/' dubash.body
+
+# Ajoute les fonctions si absentes
+if ! grep -q "cmd_seed_circles()" dubash.body; then
+cat >> dubash.body <<'FUN'
+
+cmd_seed_circles(){
+  ensure_dirs
+  require curl
+  [ -f ".env" ] && { set -a; . ".env"; set +a; }
+  : "${API_PORT:=5050}"
+  log "🌱 Seeding cercles (via API)"
+  seeds='[
+    {"title":"Agora — Cœur","description":"Coordination, écoute, cadence"},
+    {"title":"Tech — Forge","description":"Backend, IA, orchestration Bash"},
+    {"title":"Culture — Racines","description":"Art, récit, mémoire vivante"}
+  ]'
+  # Poste chaque seed (ignore 409 title_exists)
+  python3 - "$API_PORT" <<'PYSEED'
+import sys, json, urllib.request
+port = int(sys.argv[1])
+seeds = json.loads(sys.stdin.read())
+for s in seeds:
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/circles",
+                                 data=json.dumps(s).encode("utf-8"),
+                                 headers={"Content-Type":"application/json"})
+    try:
+        with urllib.request.urlopen(req) as resp:
+            print("[seed] OK", s["title"], resp.status)
+    except urllib.error.HTTPError as e:
+        if e.code == 409:
+            print("[seed] SKIP exists", s["title"])
+        else:
+            print("[seed] ERR", s["title"], e.code)
+PYSEED
+}
+
+cmd_dump_circles(){
+  ensure_dirs
+  require curl
+  [ -f ".env" ] && { set -a; . ".env"; set +a; }
+  : "${API_PORT:=5050}"
+  log "📝 Dump cercles"
+  curl -s "http://127.0.0.1:${API_PORT}/circles"
+}
+
+cmd_clear_circles(){
+  ensure_dirs
+  [ -f ".env" ] && { set -a; . ".env"; set +a; }
+  : "${API_PORT:=5050}"
+  # si API up → DELETE chaque id, sinon wipe fichier
+  if curl -sf "http://127.0.0.1:${API_PORT}/health" >/dev/null 2>&1; then
+    log "🧽 Clear (via API)"
+    ids=$(curl -s "http://127.0.0.1:${API_PORT}/circles" | python3 -c 'import sys,json; data=json.load(sys.stdin); print(" ".join(str(i["id"]) for i in data.get("items",[])))')
+    for id in $ids; do
+      curl -s -X DELETE "http://127.0.0.1:${API_PORT}/circles/$id" >/dev/null
+      echo "[clear] id=$id"
+    done
+  else
+    log "🧼 Clear (wipe fichier)"
+    echo "[]" > var/memory/circles.json
+  fi
+  log "✅ Cercles vidés"
+}
+FUN
+fi
+
+mv dubash.body dubash
+rm -f dubash.head
+chmod +x dubash
+
+# 3) DOC
+if ! grep -q "### Validation" DOC.md 2>/dev/null; then
+  cat >> DOC.md <<'MD'
+
+### Validation
+- `title` requis, max 80 caractères, **unique** (insensible à la casse)
+- `description` max 2000 caractères
+- Erreurs possibles : `title_required` (400), `title_too_long` (400), `description_too_long` (400), `title_exists` (409)
+
+### Commandes utilitaires
+- `./dubash seed:circles` → crée 2–3 cercles de démo (via API)
+- `./dubash dump:circles` → affiche la liste JSON
+- `./dubash clear:circles` → supprime tous les cercles (API si up, sinon wipe fichier)
+MD
+fi
+
+# 4) (Optionnel) commit
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  git add -A
+  if ! git diff --cached --quiet; then
+    git commit -m "feat(circles): validations + seed/dump/clear (dubash)"
+    # décommente pour pousser auto:
+    # git push -u origin dev || true
+  fi
+fi
+
+echo "✅ Validations + commandes ajoutées."
+echo "→ Redémarre l'API si nécessaire: ./dubash api:up"
+echo "→ Puis: ./dubash seed:circles && ./dubash dump:circles"

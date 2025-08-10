@@ -50,6 +50,9 @@ cmd_api_status(){
 }
 
 case "${1:-help}" in
+  seed:circles) cmd_seed_circles ;;
+  dump:circles) cmd_dump_circles ;;
+  clear:circles) cmd_clear_circles ;;
   help|-h|--help) help ;;
   build) cmd_build ;;
   up) cmd_up ;;
@@ -64,3 +67,62 @@ case "${1:-help}" in
   api:status) cmd_api_status ;;
   *) echo "Commande inconnue: $1"; echo; help; exit 1 ;;
 esac
+
+cmd_seed_circles(){
+  ensure_dirs
+  require curl
+  [ -f ".env" ] && { set -a; . ".env"; set +a; }
+  : "${API_PORT:=5050}"
+  log "🌱 Seeding cercles (via API)"
+  seeds='[
+    {"title":"Agora — Cœur","description":"Coordination, écoute, cadence"},
+    {"title":"Tech — Forge","description":"Backend, IA, orchestration Bash"},
+    {"title":"Culture — Racines","description":"Art, récit, mémoire vivante"}
+  ]'
+  # Poste chaque seed (ignore 409 title_exists)
+  python3 - "$API_PORT" <<'PYSEED'
+import sys, json, urllib.request
+port = int(sys.argv[1])
+seeds = json.loads(sys.stdin.read())
+for s in seeds:
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/circles",
+                                 data=json.dumps(s).encode("utf-8"),
+                                 headers={"Content-Type":"application/json"})
+    try:
+        with urllib.request.urlopen(req) as resp:
+            print("[seed] OK", s["title"], resp.status)
+    except urllib.error.HTTPError as e:
+        if e.code == 409:
+            print("[seed] SKIP exists", s["title"])
+        else:
+            print("[seed] ERR", s["title"], e.code)
+PYSEED
+}
+
+cmd_dump_circles(){
+  ensure_dirs
+  require curl
+  [ -f ".env" ] && { set -a; . ".env"; set +a; }
+  : "${API_PORT:=5050}"
+  log "📝 Dump cercles"
+  curl -s "http://127.0.0.1:${API_PORT}/circles"
+}
+
+cmd_clear_circles(){
+  ensure_dirs
+  [ -f ".env" ] && { set -a; . ".env"; set +a; }
+  : "${API_PORT:=5050}"
+  # si API up → DELETE chaque id, sinon wipe fichier
+  if curl -sf "http://127.0.0.1:${API_PORT}/health" >/dev/null 2>&1; then
+    log "🧽 Clear (via API)"
+    ids=$(curl -s "http://127.0.0.1:${API_PORT}/circles" | python3 -c 'import sys,json; data=json.load(sys.stdin); print(" ".join(str(i["id"]) for i in data.get("items",[])))')
+    for id in $ids; do
+      curl -s -X DELETE "http://127.0.0.1:${API_PORT}/circles/$id" >/dev/null
+      echo "[clear] id=$id"
+    done
+  else
+    log "🧼 Clear (wipe fichier)"
+    echo "[]" > var/memory/circles.json
+  fi
+  log "✅ Cercles vidés"
+}
