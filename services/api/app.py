@@ -5,6 +5,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 API_PORT = int(os.getenv("API_PORT", "5050"))
 DB_PATH  = os.path.join("var", "memory", "circles.json")
 
+TITLE_MAX = 80
+DESC_MAX  = 2000
+
 def _load_db():
     try:
         with open(DB_PATH, "r", encoding="utf-8") as f:
@@ -16,7 +19,6 @@ def _load_db():
 
 def _save_db(data):
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    # Écriture atomique
     fd, tmp = tempfile.mkstemp(prefix="circles_", suffix=".json", dir=os.path.dirname(DB_PATH))
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -27,6 +29,18 @@ def _next_id(items):
 
 def _now_iso():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+def _norm_title(t):
+    return (t or "").strip().lower()
+
+def _has_title(items, title, exclude_id=None):
+    nt = _norm_title(title)
+    for c in items:
+        if exclude_id is not None and c.get("id") == exclude_id:
+            continue
+        if _norm_title(c.get("title")) == nt:
+            return True
+    return False
 
 class Handler(BaseHTTPRequestHandler):
     def _cors(self):
@@ -63,7 +77,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.path in ("/", ""):
             return self._json(200, {
                 "name": "Agora API",
-                "endpoints": ["/health", "/time", "/echo (POST)", "/circles"]
+                "endpoints": ["/health", "/time", "/echo (POST)", "/circles"],
+                "limits": {"title_max": TITLE_MAX, "description_max": DESC_MAX}
             })
         if self.path == "/health":
             return self._json(200, {"status": "ok"})
@@ -92,9 +107,18 @@ class Handler(BaseHTTPRequestHandler):
             body = self._parse_body()
             title = (body.get("title") or "").strip()
             desc  = (body.get("description") or "").strip()
+
             if not title:
                 return self._json(400, {"error": "title_required"})
+            if len(title) > TITLE_MAX:
+                return self._json(400, {"error": "title_too_long", "max": TITLE_MAX})
+            if len(desc) > DESC_MAX:
+                return self._json(400, {"error": "description_too_long", "max": DESC_MAX})
+
             data = _load_db()
+            if _has_title(data, title):
+                return self._json(409, {"error": "title_exists"})
+
             cid = _next_id(data)
             now = _now_iso()
             item = {
@@ -120,10 +144,20 @@ class Handler(BaseHTTPRequestHandler):
         data = _load_db()
         for c in data:
             if c.get("id") == cid:
-                if "title" in body and isinstance(body["title"], str):
-                    c["title"] = body["title"].strip()
-                if "description" in body and isinstance(body["description"], str):
-                    c["description"] = body["description"].strip()
+                if "title" in body:
+                    t = (body.get("title") or "").strip()
+                    if not t:
+                        return self._json(400, {"error": "title_required"})
+                    if len(t) > TITLE_MAX:
+                        return self._json(400, {"error": "title_too_long", "max": TITLE_MAX})
+                    if _has_title(data, t, exclude_id=cid):
+                        return self._json(409, {"error": "title_exists"})
+                    c["title"] = t
+                if "description" in body:
+                    d = (body.get("description") or "").strip()
+                    if len(d) > DESC_MAX:
+                        return self._json(400, {"error": "description_too_long", "max": DESC_MAX})
+                    c["description"] = d
                 c["updated_at"] = _now_iso()
                 _save_db(data)
                 return self._json(200, c)
